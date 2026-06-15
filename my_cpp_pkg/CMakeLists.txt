@@ -10,6 +10,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(example_interfaces REQUIRED)
+find_package(my_robot_interfaces REQUIRED)
 
 add_executable(input_num src/input_num.cpp)
 ament_target_dependencies(input_num rclcpp std_msgs)
@@ -38,6 +39,9 @@ ament_target_dependencies(calci_divide_node rclcpp example_interfaces)
 add_executable(calci_subtract_node src/calci_subtract_node.cpp)
 ament_target_dependencies(calci_subtract_node rclcpp example_interfaces)
 
+add_executable(full_calci_server src/full_calci.cpp)
+ament_target_dependencies(full_calci_server rclcpp my_robot_interfaces)
+
 install(TARGETS
   input_num
   factorial_node
@@ -48,6 +52,7 @@ install(TARGETS
   calci_multiply_node
   calci_divide_node
   calci_subtract_node
+  full_calci_server
   DESTINATION lib/${PROJECT_NAME}
 )
 

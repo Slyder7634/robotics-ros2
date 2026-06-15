@@ -7,7 +7,11 @@
 4. [Creating Nodes](#creating-nodes)
 5. [Topics (Pub/Sub)](#topics)
 6. [Services (Request/Response)](#services)
-7. [Important Terminal Commands](#important-terminal-commands)
+7. [Parameters](#parameters)
+8. [Custom Messages & Services](#custom-messages--services)
+9. [Pipeline Architecture](#pipeline-architecture)
+10. [User Input Pattern](#user-input-pattern)
+11. [Important Terminal Commands](#important-terminal-commands)
 
 ---
 
@@ -566,6 +570,692 @@ private:
     >::SharedPtr client_;
 };
 ```
+
+---
+
+## Parameters
+
+### What are Parameters?
+Parameters are node configuration values that can be set and modified at runtime without restarting the node. Each node can have its own parameters.
+
+### Why Parameters?
+- **Reconfiguration**: Change node behavior without restarting
+- **Flexibility**: Different settings for different environments
+- **Testing**: Quickly test different configurations
+- **Shared settings**: Access from command line or other nodes
+
+### When to Use Parameters?
+- Robot speed (max velocity, acceleration)
+- Sensor calibration values
+- PID controller gains
+- Debug flags or logging levels
+- Timeout values
+- File paths or configurations
+
+### How Parameters Work?
+1. Node declares parameter with name, type, and default value
+2. Parameter is initialized to default value
+3. Can be overridden via command line during startup
+4. Can be read at runtime using `get_parameter()`
+5. Can be modified at runtime (if parameter callbacks are set up)
+
+### Python Parameters
+
+**Declare and Get Parameter:**
+```python
+from rclpy.parameter import Parameter
+from rcl_interfaces.msg import ParameterType
+
+class ConfigurableNode(Node):
+    def __init__(self):
+        super().__init__("configurable_node")
+        
+        # Declare parameter with default value
+        self.declare_parameter(
+            'max_speed',           # Parameter name
+            50.0                   # Default value
+        )
+        
+        # Get parameter value
+        max_speed = self.get_parameter(
+            'max_speed'
+        ).get_parameter_value().double_value
+        
+        self.get_logger().info(
+            f"Max speed set to: {max_speed}"
+        )
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = ConfigurableNode()
+    rclpy.spin(node)
+    rclpy.shutdown()
+
+if __name__ == "__main__":
+    main()
+```
+
+**Run with Custom Parameter:**
+```bash
+# Override parameter on command line
+ros2 run my_py_pkg configurable_node --ros-args -p max_speed:=100.0
+
+# Set multiple parameters
+ros2 run my_py_pkg configurable_node --ros-args -p max_speed:=100.0 -p debug:=true
+```
+
+### C++ Parameters
+
+**Declare and Get Parameter:**
+```cpp
+#include <rclcpp/rclcpp.hpp>
+
+class ConfigurableNode : public rclcpp::Node
+{
+public:
+    ConfigurableNode() : Node("configurable_node")
+    {
+        // Declare parameter with default value
+        this->declare_parameter<double>("max_speed", 50.0);
+        
+        // Get parameter value
+        double max_speed = this->get_parameter(
+            "max_speed"
+        ).as_double();
+        
+        RCLCPP_INFO(this->get_logger(),
+                    "Max speed set to: %f", max_speed);
+    }
+};
+
+int main(int argc, char **argv)
+{
+    rclcpp::init(argc, argv);
+    auto node = std::make_shared<ConfigurableNode>();
+    rclcpp::spin(node);
+    rclcpp::shutdown();
+    return 0;
+}
+```
+
+**Run with Custom Parameter:**
+```bash
+# Override parameter on command line
+ros2 run my_cpp_pkg configurable_node --ros-args -p max_speed:=100.0
+```
+
+### Parameter Types
+
+**Python:**
+```python
+# String
+self.declare_parameter('robot_name', 'MyRobot')
+
+# Integer
+self.declare_parameter('num_sensors', 5)
+
+# Double/Float
+self.declare_parameter('speed', 1.5)
+
+# Boolean
+self.declare_parameter('debug_mode', False)
+
+# List/Array
+self.declare_parameter('goal_position', [1.0, 2.0, 3.0])
+```
+
+**C++:**
+```cpp
+// String
+this->declare_parameter<std::string>("robot_name", "MyRobot");
+
+// Integer
+this->declare_parameter<int>("num_sensors", 5);
+
+// Double
+this->declare_parameter<double>("speed", 1.5);
+
+// Boolean
+this->declare_parameter<bool>("debug_mode", false);
+
+// Vector (list)
+this->declare_parameter<std::vector<double>>(
+    "goal_position", 
+    {1.0, 2.0, 3.0}
+);
+```
+
+### Parameter Callbacks (Advanced)
+
+**Python - Watch for parameter changes:**
+```python
+def __init__(self):
+    super().__init__("configurable_node")
+    
+    self.declare_parameter('max_speed', 50.0)
+    
+    # Add callback for parameter changes
+    self.add_on_set_parameters_callback(
+        self.parameters_callback
+    )
+
+def parameters_callback(self, params):
+    for param in params:
+        if param.name == 'max_speed':
+            self.get_logger().info(
+                f"Parameter changed to: {param.value}"
+            )
+    return SetParametersResult(successful=True)
+```
+
+### Terminal Parameter Commands
+
+```bash
+# List node parameters
+ros2 param list /node_name
+
+# Get parameter value
+ros2 param get /node_name param_name
+
+# Set parameter (while running)
+ros2 param set /node_name param_name 100.0
+
+# Describe parameters
+ros2 param describe /node_name param_name
+
+# Save parameters to file
+ros2 param dump /node_name > params.yaml
+
+# Load parameters from file
+ros2 run my_pkg my_node --ros-args --params-file params.yaml
+```
+
+---
+
+## Custom Messages & Services
+
+### What are Custom Messages & Services?
+Custom messages and services allow you to define your own data structures for communication between nodes, beyond the built-in types like `String`, `Int64`, etc.
+
+### When to Use?
+- Need multiple fields in one message
+- Complex data structures
+- Domain-specific data types
+- Better code organization and type safety
+
+### Create a Custom Message
+
+**File: `my_robot_interfaces/msg/HardwareStatus.msg`**
+```
+string hardware_name
+int32 status
+float64 temperature
+bool is_operational
+```
+
+**Edit `my_robot_interfaces/CMakeLists.txt`:**
+```cmake
+find_package(rosidl_default_generators REQUIRED)
+
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/HardwareStatus.msg"
+)
+```
+
+**Edit `my_robot_interfaces/package.xml`:**
+```xml
+<build_depend>rosidl_default_generators</build_depend>
+<exec_depend>rosidl_default_runtime</exec_depend>
+<member_of_group>rosidl_interface_packages</member_of_group>
+```
+
+**Build:**
+```bash
+colcon build
+source install/setup.bash
+```
+
+### Create a Custom Service
+
+**File: `my_robot_interfaces/srv/ComputeTwoInts.srv`**
+```
+int64 a
+int64 b
+string operation
+---
+int64 result
+```
+
+The structure is:
+- **Request fields** (before `---`): `a`, `b`, `operation`
+- **Response fields** (after `---`): `result`
+
+**Edit `my_robot_interfaces/CMakeLists.txt`:**
+```cmake
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/HardwareStatus.msg"
+  "srv/ComputeTwoInts.srv"
+)
+```
+
+**Build:**
+```bash
+colcon build
+source install/setup.bash
+```
+
+### Use Custom Message in Python
+
+**Publisher:**
+```python
+from my_robot_interfaces.msg import HardwareStatus
+
+class HardwareNode(Node):
+    def __init__(self):
+        super().__init__("hardware_node")
+        self.publisher = self.create_publisher(
+            HardwareStatus,
+            "hardware_status",
+            10
+        )
+        self.timer = self.create_timer(1.0, self.publish_status)
+    
+    def publish_status(self):
+        msg = HardwareStatus()
+        msg.hardware_name = "Motor_1"
+        msg.status = 1
+        msg.temperature = 45.5
+        msg.is_operational = True
+        self.publisher.publish(msg)
+```
+
+**Subscriber:**
+```python
+from my_robot_interfaces.msg import HardwareStatus
+
+class MonitorNode(Node):
+    def __init__(self):
+        super().__init__("monitor_node")
+        self.subscription = self.create_subscription(
+            HardwareStatus,
+            "hardware_status",
+            self.status_callback,
+            10
+        )
+    
+    def status_callback(self, msg):
+        self.get_logger().info(
+            f"Hardware: {msg.hardware_name}, "
+            f"Temp: {msg.temperature}°C, "
+            f"Operational: {msg.is_operational}"
+        )
+```
+
+### Use Custom Service in Python
+
+**Server:**
+```python
+from my_robot_interfaces.srv import ComputeTwoInts
+
+class CalcServer(Node):
+    def __init__(self):
+        super().__init__("calc_server")
+        self.service = self.create_service(
+            ComputeTwoInts,
+            "compute_two_ints",
+            self.compute_callback
+        )
+    
+    def compute_callback(self, request, response):
+        if request.operation == "add":
+            response.result = request.a + request.b
+        elif request.operation == "sub":
+            response.result = request.a - request.b
+        elif request.operation == "mul":
+            response.result = request.a * request.b
+        elif request.operation == "div":
+            response.result = request.a // request.b
+        else:
+            response.result = 0
+        
+        self.get_logger().info(
+            f"{request.a} {request.operation} {request.b} = {response.result}"
+        )
+        return response
+```
+
+**Client:**
+```python
+from my_robot_interfaces.srv import ComputeTwoInts
+
+class CalcClient(Node):
+    def __init__(self):
+        super().__init__("calc_client")
+        self.client = self.create_client(
+            ComputeTwoInts,
+            "compute_two_ints"
+        )
+        
+        while not self.client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info("Waiting for service...")
+        
+        self.send_request("add", 10, 5)
+    
+    def send_request(self, operation, a, b):
+        request = ComputeTwoInts.Request()
+        request.a = a
+        request.b = b
+        request.operation = operation
+        
+        future = self.client.call_async(request)
+        future.add_done_callback(self.response_callback)
+    
+    def response_callback(self, future):
+        response = future.result()
+        self.get_logger().info(f"Result: {response.result}")
+```
+
+### Use Custom Service in C++
+
+**Server:**
+```cpp
+#include "my_robot_interfaces/srv/compute_two_ints.hpp"
+using ComputeTwoInts = my_robot_interfaces::srv::ComputeTwoInts;
+using std::placeholders::_1;
+using std::placeholders::_2;
+
+class CalcServer : public rclcpp::Node
+{
+public:
+    CalcServer() : Node("calc_server")
+    {
+        service_ = this->create_service<ComputeTwoInts>(
+            "compute_two_ints",
+            std::bind(&CalcServer::compute_callback, this, _1, _2)
+        );
+    }
+
+private:
+    void compute_callback(
+        const std::shared_ptr<ComputeTwoInts::Request> request,
+        const std::shared_ptr<ComputeTwoInts::Response> response)
+    {
+        if (request->operation == "add") {
+            response->result = request->a + request->b;
+        } else if (request->operation == "sub") {
+            response->result = request->a - request->b;
+        }
+        
+        RCLCPP_INFO(this->get_logger(),
+                    "%ld %s %ld = %ld",
+                    request->a,
+                    request->operation.c_str(),
+                    request->b,
+                    response->result);
+    }
+    
+    rclcpp::Service<ComputeTwoInts>::SharedPtr service_;
+};
+```
+
+**Update CMakeLists.txt to link custom interface:**
+```cmake
+find_package(my_robot_interfaces REQUIRED)
+
+add_executable(calc_server src/calc_server.cpp)
+ament_target_dependencies(calc_server rclcpp my_robot_interfaces)
+```
+
+---
+
+## Pipeline Architecture
+
+### What is Pipeline Architecture?
+A pipeline architecture connects multiple nodes in sequence, where data flows from one node to the next. Each node performs a specific task and passes results to the next node.
+
+### Pattern:
+```
+Input Node → Processing Node 1 → Processing Node 2 → Output Node
+```
+
+### Example: Calculator Pipeline
+
+**Node 1: Input Node** - Reads numbers from user input
+```cpp
+class InputNum : public rclcpp::Node
+{
+public:
+    InputNum() : Node("input_num"), running_(true)
+    {
+        pub_ = this->create_publisher<std_msgs::msg::Int64>("input_number", 10);
+        
+        // Thread for non-blocking stdin
+        reader_thread_ = std::thread([this]() {
+            while (rclcpp::ok() && running_) {
+                int64_t n;
+                if (!(std::cin >> n)) {
+                    running_ = false;
+                    break;
+                }
+                publishNumber(n);
+            }
+        });
+    }
+
+private:
+    void publishNumber(int64_t num)
+    {
+        auto msg = std_msgs::msg::Int64();
+        msg.data = num;
+        pub_->publish(msg);
+    }
+    
+    rclcpp::Publisher<std_msgs::msg::Int64>::SharedPtr pub_;
+    std::thread reader_thread_;
+    std::atomic<bool> running_;
+};
+```
+
+**Node 2: Processing Node** - Subscribes to input, publishes result
+```cpp
+class FactorialNode : public rclcpp::Node
+{
+public:
+    FactorialNode() : Node("factorial_node")
+    {
+        sub_ = this->create_subscription<std_msgs::msg::Int64>(
+            "input_number", 10,
+            std::bind(&FactorialNode::compute_callback, this, _1)
+        );
+        
+        pub_ = this->create_publisher<std_msgs::msg::Int64>("fact_result", 10);
+    }
+
+private:
+    void compute_callback(const std_msgs::msg::Int64::SharedPtr msg)
+    {
+        int64_t result = factorial(msg->data);
+        auto output = std_msgs::msg::Int64();
+        output.data = result;
+        pub_->publish(output);
+    }
+    
+    int64_t factorial(int64_t n)
+    {
+        return (n <= 1) ? 1 : n * factorial(n - 1);
+    }
+    
+    rclcpp::Subscription<std_msgs::msg::Int64>::SharedPtr sub_;
+    rclcpp::Publisher<std_msgs::msg::Int64>::SharedPtr pub_;
+};
+```
+
+**Node 3: Output Node** - Displays final result
+```cpp
+class OutputNode : public rclcpp::Node
+{
+public:
+    OutputNode() : Node("output_node")
+    {
+        sub_ = this->create_subscription<std_msgs::msg::Int64>(
+            "fact_result", 10,
+            std::bind(&OutputNode::callback, this, _1)
+        );
+    }
+
+private:
+    void callback(const std_msgs::msg::Int64::SharedPtr msg)
+    {
+        RCLCPP_INFO(this->get_logger(),
+                    "Factorial result: %ld", msg->data);
+    }
+    
+    rclcpp::Subscription<std_msgs::msg::Int64>::SharedPtr sub_;
+};
+```
+
+**Run the Pipeline:**
+```bash
+# Terminal 1: Input node
+ros2 run my_cpp_pkg input_num
+
+# Terminal 2: Processing node
+ros2 run my_cpp_pkg factorial
+
+# Terminal 3: Output node
+ros2 run my_cpp_pkg output_num
+
+# Terminal 4: Monitor (optional)
+ros2 topic echo input_number
+ros2 topic echo fact_result
+```
+
+### Advantages of Pipeline Architecture
+- **Modular**: Each node has single responsibility
+- **Testable**: Test each node independently
+- **Reusable**: Nodes can be used in different pipelines
+- **Scalable**: Easy to add/remove nodes
+- **Flexible**: Can rearrange pipeline without changing node code
+
+---
+
+## User Input Pattern
+
+### What is User Input Pattern?
+This pattern allows a node to read user input from keyboard (stdin) and publish it as ROS2 messages or use it to trigger actions.
+
+### Why Use?
+- **Interactive nodes**: Allow user to control behavior at runtime
+- **Testing**: Manually send data/commands
+- **Debugging**: Quick input without external tools
+- **Simple interfaces**: User-friendly control
+
+### C++ Implementation
+
+**Using std::thread for Non-Blocking Input:**
+```cpp
+#include <rclcpp/rclcpp.hpp>
+#include <std_msgs/msg/int64.hpp>
+#include <thread>
+#include <atomic>
+#include <iostream>
+
+class InputNode : public rclcpp::Node
+{
+public:
+    InputNode() : Node("input_node"), running_(true)
+    {
+        pub_ = this->create_publisher<std_msgs::msg::Int64>("user_input", 10);
+        
+        // Start reader thread (doesn't block ROS2 spin)
+        reader_thread_ = std::thread([this]() {
+            while (rclcpp::ok() && running_) {
+                int64_t value;
+                std::cout << "Enter a number: ";
+                
+                if (!(std::cin >> value)) {
+                    running_ = false;
+                    break;
+                }
+                
+                publishValue(value);
+            }
+        });
+    }
+    
+    ~InputNode()
+    {
+        running_ = false;
+        if (reader_thread_.joinable()) {
+            reader_thread_.join();
+        }
+    }
+
+private:
+    void publishValue(int64_t value)
+    {
+        auto msg = std_msgs::msg::Int64();
+        msg.data = value;
+        pub_->publish(msg);
+        RCLCPP_INFO(this->get_logger(), "Published: %ld", value);
+    }
+    
+    rclcpp::Publisher<std_msgs::msg::Int64>::SharedPtr pub_;
+    std::thread reader_thread_;
+    std::atomic<bool> running_;
+};
+```
+
+### Python Implementation
+
+**Using threading for Non-Blocking Input:**
+```python
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import Int64
+import threading
+
+class InputNode(Node):
+    def __init__(self):
+        super().__init__("input_node")
+        self.pub = self.create_publisher(Int64, "user_input", 10)
+        self.running = True
+        
+        # Start reader thread
+        self.reader_thread = threading.Thread(target=self.read_input)
+        self.reader_thread.daemon = True
+        self.reader_thread.start()
+    
+    def read_input(self):
+        while rclpy.ok() and self.running:
+            try:
+                value = int(input("Enter a number: "))
+                msg = Int64()
+                msg.data = value
+                self.pub.publish(msg)
+                self.get_logger().info(f"Published: {value}")
+            except ValueError:
+                self.get_logger().warn("Invalid input")
+            except EOFError:
+                self.running = False
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = InputNode()
+    rclpy.spin(node)
+    rclpy.shutdown()
+
+if __name__ == "__main__":
+    main()
+```
+
+### Best Practices
+
+1. **Always use threads** - Don't block the main ROS2 spin
+2. **Handle EOF** - Gracefully exit when input stream ends
+3. **Validate input** - Check user input is valid
+4. **Use atomic variables** - For thread-safe flag management
+5. **Clean up threads** - Join threads in destructor
 
 ---
 
